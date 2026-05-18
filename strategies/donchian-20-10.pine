@@ -79,17 +79,13 @@ plot(ema,    "EMA200",      color = color.orange, linewidth = 2)
 // como mensaje el placeholder {{strategy.order.alert_message}}, o usa
 // directamente las cadenas JSON de abajo en alertas separadas.
 buildMsg(action, side, q, stp) =>
-    '{"secret":"' + "REPLACE_WITH_WEBHOOK_SECRET" + '",' +
-    '"strategy":"donchian-20-10",' +
-    '"ticker":"{{ticker}}",' +
-    '"exchange":"{{exchange}}",' +
-    '"interval":"{{interval}}",' +
-    '"action":"' + action + '",' +
-    '"side":"' + side + '",' +
-    '"price":"{{close}}",' +
-    '"time":"{{timenow}}",' +
-    '"qty":"' + str.tostring(q, "#.########") + '",' +
-    '"stop":"' + str.tostring(stp, "#.########") + '"}'
+    head = '{"secret":"REPLACE_WITH_WEBHOOK_SECRET","strategy":"donchian-20-10",'
+    sym  = '"ticker":"{{ticker}}","exchange":"{{exchange}}","interval":"{{interval}}",'
+    act  = '"action":"' + action + '","side":"' + side + '",'
+    px   = '"price":"{{close}}","time":"{{timenow}}",'
+    qty_ = '"qty":"' + str.tostring(q, "#.########") + '",'
+    stp_ = '"stop":"' + str.tostring(stp, "#.########") + '"}'
+    head + sym + act + px + qty_ + stp_
 
 if longEntry and strategy.position_size == 0
     alert(buildMsg("entry", "long", qty, close - stopDist), alert.freq_once_per_bar_close)
