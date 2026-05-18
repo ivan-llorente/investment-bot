@@ -1,0 +1,117 @@
+//@version=6
+// CME Gap Fill (BTC y similares)
+//
+// Lógica:
+//   - CME BTC futuro cierra viernes 22:00 UTC y reabre domingo 23:00 UTC.
+//   - Durante ese fin de semana, el spot sigue moviéndose -> al volver
+//     el lunes hay un "gap" entre el cierre del viernes y la apertura
+//     del domingo.
+//   - Edge histórico: ~70-80% de esos gaps se rellenan en 7-14 días.
+//   - Gap up    (sunOpen > friClose) -> SHORT, target = friClose
+//   - Gap down  (sunOpen < friClose) -> LONG,  target = friClose
+//   - Stop = sunOpen +/- N*ATR
+//   - Time stop = N bars (por defecto 168 = 7 días en 1H)
+//
+// IMPORTANTE: pensada para gráfico 1H. En 4H o superior se pierde la
+// granularidad horaria de detección y el script no captura el gap.
+strategy("CME Gap Fill BTC",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.cash,
+     default_qty_value    = 100,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.075,
+     slippage             = 2,
+     process_orders_on_close = true,
+     calc_on_every_tick   = false,
+     pyramiding           = 0)
+
+// === Inputs ===
+gapMinPct   = input.float(0.5,  "Min gap % to trade",        minval = 0.1, step = 0.1)
+stopAtrMult = input.float(1.5,  "Stop ATR multiple",         minval = 0.5, step = 0.1)
+atrLen      = input.int(14,     "ATR length",                minval = 2)
+maxBarsHold = input.int(168,    "Max hold (bars, 168=7d 1H)",minval = 24)
+riskPct     = input.float(1.0,  "Risk per trade (%)",        minval = 0.1, maxval = 5.0, step = 0.1)
+
+// === Detectores de hora ===
+// dayofweek constants: sunday=1, monday=2, ..., friday=6, saturday=7
+isFriBar22 = dayofweek(time, "UTC") == dayofweek.friday and hour(time, "UTC") == 22
+isSunBar23 = dayofweek(time, "UTC") == dayofweek.sunday and hour(time, "UTC") == 23
+
+// === Estado persistente ===
+var float friClose  = na
+var float gapTarget = na
+var int   entryBar  = na
+
+// Capturar cierre de CME del viernes (= open del candle 22:00 Fri)
+if isFriBar22
+    friClose := open
+
+// === Detección de gap en apertura del domingo ===
+isLongEntry  = false
+isShortEntry = false
+gapPct       = 0.0
+
+if isSunBar23 and not na(friClose) and strategy.position_size == 0
+    sunOpenPx = open
+    gapPct   := (sunOpenPx - friClose) / friClose * 100
+    if math.abs(gapPct) >= gapMinPct
+        gapTarget    := friClose
+        isLongEntry  := gapPct < 0
+        isShortEntry := gapPct > 0
+
+// === Indicadores y sizing ===
+atrVal   = ta.atr(atrLen)
+stopDist = atrVal * stopAtrMult
+riskCash = strategy.equity * riskPct / 100
+qty      = stopDist > 0 ? riskCash / stopDist : 0.0
+
+// === Ejecución de entradas ===
+if isLongEntry
+    strategy.entry("L", strategy.long, qty = qty)
+    strategy.exit("L-stop", "L", stop = close - stopDist)
+    entryBar := bar_index
+
+if isShortEntry
+    strategy.entry("S", strategy.short, qty = qty)
+    strategy.exit("S-stop", "S", stop = close + stopDist)
+    entryBar := bar_index
+
+// === Salidas: target (gap fill) o time stop ===
+longTargetHit  = strategy.position_size > 0 and not na(gapTarget) and high >= gapTarget
+shortTargetHit = strategy.position_size < 0 and not na(gapTarget) and low  <= gapTarget
+timeUp         = not na(entryBar) and bar_index - entryBar >= maxBarsHold
+
+if strategy.position_size > 0 and (longTargetHit or timeUp)
+    strategy.close("L", comment = longTargetHit ? "gap-fill" : "time-stop")
+
+if strategy.position_size < 0 and (shortTargetHit or timeUp)
+    strategy.close("S", comment = shortTargetHit ? "gap-fill" : "time-stop")
+
+// Limpiar estado al cerrar
+if strategy.position_size == 0 and not na(entryBar)
+    entryBar  := na
+    gapTarget := na
+
+// === Plots ===
+plot(friClose,  "Fri 22:00 close", color = color.new(color.orange, 30), style = plot.style_circles)
+plot(gapTarget, "Gap target",      color = color.new(color.yellow, 0),  style = plot.style_linebr, linewidth = 2)
+bgcolor(isSunBar23 ? color.new(color.blue, 90) : na, title = "Sun 23:00 marker")
+bgcolor(isFriBar22 ? color.new(color.orange, 90) : na, title = "Fri 22:00 marker")
+
+// === Alertas para webhook ===
+// Mismo esquema que v1/v2 + campo "target" para uso futuro.
+SECRET = "REPLACE_WITH_WEBHOOK_SECRET"
+HEAD   = '"strategy":"cme-gap","ticker":"{{ticker}}","exchange":"{{exchange}}","interval":"{{interval}}","price":"{{close}}","time":"{{timenow}}"'
+
+if isLongEntry
+    alert('{"secret":"' + SECRET + '",' + HEAD + ',"action":"entry","side":"long","qty":"'  + str.tostring(qty) + '","stop":"' + str.tostring(close - stopDist) + '","target":"' + str.tostring(gapTarget) + '"}', alert.freq_once_per_bar_close)
+
+if isShortEntry
+    alert('{"secret":"' + SECRET + '",' + HEAD + ',"action":"entry","side":"short","qty":"' + str.tostring(qty) + '","stop":"' + str.tostring(close + stopDist) + '","target":"' + str.tostring(gapTarget) + '"}', alert.freq_once_per_bar_close)
+
+if strategy.position_size > 0 and (longTargetHit or timeUp)
+    alert('{"secret":"' + SECRET + '",' + HEAD + ',"action":"exit","side":"long","qty":"0","stop":"0"}', alert.freq_once_per_bar_close)
+
+if strategy.position_size < 0 and (shortTargetHit or timeUp)
+    alert('{"secret":"' + SECRET + '",' + HEAD + ',"action":"exit","side":"short","qty":"0","stop":"0"}', alert.freq_once_per_bar_close)
