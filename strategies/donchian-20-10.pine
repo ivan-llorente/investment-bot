@@ -75,23 +75,20 @@ plot(exitDn, "Exit lower",  color = color.new(color.red,   60))
 plot(ema,    "EMA200",      color = color.orange, linewidth = 2)
 
 // === Alertas para webhook ===
-// Configura UNA alerta con condición "Any alert() function call" y pega
-// como mensaje el placeholder {{strategy.order.alert_message}}, o usa
-// directamente las cadenas JSON de abajo en alertas separadas.
-buildMsg(action, side, q, stp) =>
-    head = '{"secret":"REPLACE_WITH_WEBHOOK_SECRET","strategy":"donchian-20-10",'
-    sym  = '"ticker":"{{ticker}}","exchange":"{{exchange}}","interval":"{{interval}}",'
-    act  = '"action":"' + action + '","side":"' + side + '",'
-    px   = '"price":"{{close}}","time":"{{timenow}}",'
-    qty_ = '"qty":"' + str.tostring(q, "#.########") + '",'
-    stp_ = '"stop":"' + str.tostring(stp, "#.########") + '"}'
-    head + sym + act + px + qty_ + stp_
+// Configura UNA alerta en TradingView con condición "Any alert() function
+// call" y el campo Message en blanco — Pine ya construye el JSON aquí.
+// Cada alert() es una sola línea para evitar problemas de continuación.
+SECRET = "REPLACE_WITH_WEBHOOK_SECRET"
+HEAD   = '"strategy":"donchian-20-10","ticker":"{{ticker}}","exchange":"{{exchange}}","interval":"{{interval}}","price":"{{close}}","time":"{{timenow}}"'
 
 if longEntry and strategy.position_size == 0
-    alert(buildMsg("entry", "long", qty, close - stopDist), alert.freq_once_per_bar_close)
+    alert('{"secret":"' + SECRET + '",' + HEAD + ',"action":"entry","side":"long","qty":"'  + str.tostring(qty) + '","stop":"' + str.tostring(close - stopDist) + '"}', alert.freq_once_per_bar_close)
+
 if shortEntry and strategy.position_size == 0
-    alert(buildMsg("entry", "short", qty, close + stopDist), alert.freq_once_per_bar_close)
+    alert('{"secret":"' + SECRET + '",' + HEAD + ',"action":"entry","side":"short","qty":"' + str.tostring(qty) + '","stop":"' + str.tostring(close + stopDist) + '"}', alert.freq_once_per_bar_close)
+
 if longExit and strategy.position_size > 0
-    alert(buildMsg("exit", "long", 0.0, 0.0), alert.freq_once_per_bar_close)
+    alert('{"secret":"' + SECRET + '",' + HEAD + ',"action":"exit","side":"long","qty":"0","stop":"0"}',  alert.freq_once_per_bar_close)
+
 if shortExit and strategy.position_size < 0
-    alert(buildMsg("exit", "short", 0.0, 0.0), alert.freq_once_per_bar_close)
+    alert('{"secret":"' + SECRET + '",' + HEAD + ',"action":"exit","side":"short","qty":"0","stop":"0"}', alert.freq_once_per_bar_close)
