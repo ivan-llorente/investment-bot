@@ -1,0 +1,127 @@
+//@version=6
+// Donchian 20/10 v2: Chandelier trailing stop + filtro ADX + pendiente EMA.
+// Cambios frente a v1:
+//   1. Salida principal = trailing stop ATR (Chandelier) desde el high
+//      desde la entrada. La salida por canal Donchian queda como
+//      fallback por si el trail no se ha disparado y el precio se vuelve plano.
+//   2. Entrada exige ADX > 20: evita rangos laterales donde Donchian sufre
+//      con falsos breakouts.
+//   3. Régimen pide EMA200 SUBIENDO (slope > 0), no solo precio > EMA.
+//      Filtra rebotes técnicos dentro de mercados bajistas.
+strategy("Donchian 20/10 v2 (trail + ADX + slope)",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.cash,
+     default_qty_value    = 100,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.075,
+     slippage             = 2,
+     process_orders_on_close = true,
+     calc_on_every_tick   = false,
+     pyramiding           = 0)
+
+// === Inputs ===
+entryLen     = input.int(20,   "Entry channel length",          minval = 2)
+exitLen      = input.int(10,   "Exit channel length (fallback)",minval = 2)
+emaLen       = input.int(200,  "Trend filter EMA",              minval = 20)
+emaSlopeBars = input.int(20,   "EMA slope lookback bars",       minval = 1)
+atrLen       = input.int(14,   "ATR length",                    minval = 2)
+atrMult      = input.float(2.0,"Stop / trail ATR multiple",     minval = 0.5, step = 0.1)
+riskPct      = input.float(1.0,"Risk per trade (%)",            minval = 0.1, maxval = 5.0, step = 0.1)
+adxLen       = input.int(14,   "ADX length",                    minval = 5)
+adxThreshold = input.float(20, "ADX threshold (regime gate)",   minval = 0,  maxval = 50, step = 1)
+allowShorts  = input.bool(false, "Allow shorts")
+
+// === Indicadores ===
+upper    = ta.highest(high, entryLen)[1]
+lower    = ta.lowest(low,  entryLen)[1]
+exitUp   = ta.highest(high, exitLen)[1]
+exitDn   = ta.lowest(low,  exitLen)[1]
+ema      = ta.ema(close, emaLen)
+atrVal   = ta.atr(atrLen)
+adxVal   = ta.adx(adxLen)
+emaSlope = ema - ema[emaSlopeBars]
+
+// === Filtros de régimen ===
+longRegime  = close > ema and emaSlope > 0
+shortRegime = close < ema and emaSlope < 0
+adxOk       = adxVal > adxThreshold
+
+// === Señales ===
+longEntry        = ta.crossover(high, upper) and longRegime and adxOk
+shortEntry       = allowShorts and ta.crossunder(low, lower) and shortRegime and adxOk
+longExitChannel  = ta.crossunder(low,  exitDn)
+shortExitChannel = ta.crossover(high, exitUp)
+
+// === Position sizing por riesgo fijo ===
+stopDist = atrVal * atrMult
+riskCash = strategy.equity * riskPct / 100
+qty      = stopDist > 0 ? riskCash / stopDist : 0.0
+
+// === Chandelier / trailing stop ===
+// trailLong  = max running de (high - ATR*mult) desde la entrada
+// trailShort = min running de (low  + ATR*mult) desde la entrada
+var float trailLong  = na
+var float trailShort = na
+
+// Inicializar al disparar la entrada (position aún 0 hasta el fill)
+if longEntry and strategy.position_size == 0
+    trailLong := close - stopDist
+if shortEntry and strategy.position_size == 0
+    trailShort := close + stopDist
+
+// Trail dinámico mientras hay posición abierta
+if strategy.position_size > 0
+    newTrail  = high - atrVal * atrMult
+    trailLong := na(trailLong) ? newTrail : math.max(trailLong, newTrail)
+if strategy.position_size < 0
+    newTrail   = low + atrVal * atrMult
+    trailShort := na(trailShort) ? newTrail : math.min(trailShort, newTrail)
+
+// Limpia trail cuando no hay posición
+if strategy.position_size == 0
+    trailLong  := na
+    trailShort := na
+
+// === Ejecución ===
+if longEntry and strategy.position_size == 0
+    strategy.entry("L", strategy.long, qty = qty)
+
+if shortEntry and strategy.position_size == 0
+    strategy.entry("S", strategy.short, qty = qty)
+
+// Salidas: trail primero, canal como fallback
+longTrailHit  = strategy.position_size > 0 and low  < trailLong
+shortTrailHit = strategy.position_size < 0 and high > trailShort
+
+if longTrailHit or (strategy.position_size > 0 and longExitChannel)
+    strategy.close("L", comment = longTrailHit ? "trail" : "exit-chan")
+
+if shortTrailHit or (strategy.position_size < 0 and shortExitChannel)
+    strategy.close("S", comment = shortTrailHit ? "trail" : "exit-chan")
+
+// === Plots ===
+plot(upper,      "Entry upper", color = color.new(color.green,    0))
+plot(lower,      "Entry lower", color = color.new(color.red,      0))
+plot(exitUp,     "Exit upper",  color = color.new(color.green,   60))
+plot(exitDn,     "Exit lower",  color = color.new(color.red,     60))
+plot(ema,        "EMA200",      color = color.orange, linewidth = 2)
+plot(trailLong,  "Trail long",  color = color.new(color.blue,    20), style = plot.style_linebr, linewidth = 2)
+plot(trailShort, "Trail short", color = color.new(color.fuchsia, 20), style = plot.style_linebr, linewidth = 2)
+
+// === Alertas para webhook ===
+// Mismo formato que v1 para que el server no necesite cambios.
+SECRET = "REPLACE_WITH_WEBHOOK_SECRET"
+HEAD   = '"strategy":"donchian-v2","ticker":"{{ticker}}","exchange":"{{exchange}}","interval":"{{interval}}","price":"{{close}}","time":"{{timenow}}"'
+
+if longEntry and strategy.position_size == 0
+    alert('{"secret":"' + SECRET + '",' + HEAD + ',"action":"entry","side":"long","qty":"'  + str.tostring(qty) + '","stop":"' + str.tostring(close - stopDist) + '"}', alert.freq_once_per_bar_close)
+
+if shortEntry and strategy.position_size == 0
+    alert('{"secret":"' + SECRET + '",' + HEAD + ',"action":"entry","side":"short","qty":"' + str.tostring(qty) + '","stop":"' + str.tostring(close + stopDist) + '"}', alert.freq_once_per_bar_close)
+
+if longTrailHit or (strategy.position_size > 0 and longExitChannel)
+    alert('{"secret":"' + SECRET + '",' + HEAD + ',"action":"exit","side":"long","qty":"0","stop":"0"}', alert.freq_once_per_bar_close)
+
+if shortTrailHit or (strategy.position_size < 0 and shortExitChannel)
+    alert('{"secret":"' + SECRET + '",' + HEAD + ',"action":"exit","side":"short","qty":"0","stop":"0"}', alert.freq_once_per_bar_close)
