@@ -1,0 +1,101 @@
+//@version=6
+// Donchian 20/10 breakout + EMA200 trend filter
+// Timeframe sugerido: 4H sobre BTC/USDT o ETH/USDT
+// Riesgo por trade: 1% del equity, stop a 2x ATR
+//
+// Backtest honesto:
+//   - process_orders_on_close=true evita lookahead
+//   - calc_on_every_tick=false evita repainting de la señal
+//   - usa los canales del bar anterior ([1]) para que la ruptura sea evaluable
+//   - comisión y slippage realistas para Crypto.com (~0.075% maker/taker)
+strategy("Donchian 20/10 + EMA200",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.cash,
+     default_qty_value    = 100,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.075,
+     slippage             = 2,
+     process_orders_on_close = true,
+     calc_on_every_tick   = false,
+     pyramiding           = 0)
+
+// === Inputs ===
+entryLen    = input.int(20,   "Entry channel length",  minval = 2)
+exitLen     = input.int(10,   "Exit channel length",   minval = 2)
+emaLen      = input.int(200,  "Trend filter EMA",      minval = 20)
+atrLen      = input.int(14,   "ATR length",            minval = 2)
+atrMult     = input.float(2.0,"Stop ATR multiple",     minval = 0.5, step = 0.1)
+riskPct     = input.float(1.0,"Risk per trade (%)",    minval = 0.1, maxval = 5.0, step = 0.1)
+allowShorts = input.bool(false, "Allow shorts (off por defecto: en cripto el sesgo es alcista)")
+
+// === Indicadores (todos en bar previo para evitar lookahead) ===
+upper     = ta.highest(high, entryLen)[1]
+lower     = ta.lowest(low,  entryLen)[1]
+exitUp    = ta.highest(high, exitLen)[1]
+exitDn    = ta.lowest(low,  exitLen)[1]
+ema       = ta.ema(close, emaLen)
+atrVal    = ta.atr(atrLen)
+
+// === Filtros de régimen ===
+longRegime  = close > ema
+shortRegime = close < ema
+
+// === Señales ===
+longEntry  = ta.crossover(high, upper) and longRegime
+shortEntry = allowShorts and ta.crossunder(low, lower) and shortRegime
+longExit   = ta.crossunder(low,  exitDn)
+shortExit  = ta.crossover(high, exitUp)
+
+// === Position sizing por riesgo fijo ===
+stopDist = atrVal * atrMult
+riskCash = strategy.equity * riskPct / 100
+qty      = stopDist > 0 ? riskCash / stopDist : 0.0
+
+// === Ejecución ===
+if longEntry and strategy.position_size == 0
+    strategy.entry("L", strategy.long, qty = qty)
+    strategy.exit("L-stop", "L", stop = close - stopDist)
+
+if shortEntry and strategy.position_size == 0
+    strategy.entry("S", strategy.short, qty = qty)
+    strategy.exit("S-stop", "S", stop = close + stopDist)
+
+if longExit and strategy.position_size > 0
+    strategy.close("L", comment = "exit-chan")
+
+if shortExit and strategy.position_size < 0
+    strategy.close("S", comment = "exit-chan")
+
+// === Plots ===
+plot(upper,  "Entry upper", color = color.new(color.green, 0))
+plot(lower,  "Entry lower", color = color.new(color.red,   0))
+plot(exitUp, "Exit upper",  color = color.new(color.green, 60))
+plot(exitDn, "Exit lower",  color = color.new(color.red,   60))
+plot(ema,    "EMA200",      color = color.orange, linewidth = 2)
+
+// === Alertas para webhook ===
+// Configura UNA alerta con condición "Any alert() function call" y pega
+// como mensaje el placeholder {{strategy.order.alert_message}}, o usa
+// directamente las cadenas JSON de abajo en alertas separadas.
+buildMsg(action, side, q, stp) =>
+    '{"secret":"' + "REPLACE_WITH_WEBHOOK_SECRET" + '",' +
+    '"strategy":"donchian-20-10",' +
+    '"ticker":"{{ticker}}",' +
+    '"exchange":"{{exchange}}",' +
+    '"interval":"{{interval}}",' +
+    '"action":"' + action + '",' +
+    '"side":"' + side + '",' +
+    '"price":"{{close}}",' +
+    '"time":"{{timenow}}",' +
+    '"qty":"' + str.tostring(q, "#.########") + '",' +
+    '"stop":"' + str.tostring(stp, "#.########") + '"}'
+
+if longEntry and strategy.position_size == 0
+    alert(buildMsg("entry", "long", qty, close - stopDist), alert.freq_once_per_bar_close)
+if shortEntry and strategy.position_size == 0
+    alert(buildMsg("entry", "short", qty, close + stopDist), alert.freq_once_per_bar_close)
+if longExit and strategy.position_size > 0
+    alert(buildMsg("exit", "long", 0.0, 0.0), alert.freq_once_per_bar_close)
+if shortExit and strategy.position_size < 0
+    alert(buildMsg("exit", "short", 0.0, 0.0), alert.freq_once_per_bar_close)
