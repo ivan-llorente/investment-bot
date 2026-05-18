@@ -1,0 +1,21 @@
+# Levanta Freqtrade en dry-run usando la estrategia DonchianBreakout.
+# - UI expuesta SOLO en localhost (127.0.0.1:8081) para no exponer el bot.
+# - El puerto 8080 está reservado para el webhook de TradingView del otro
+#   approach; aquí usamos 8081.
+# - El volumen monta user_data/ para que las estrategias y la DB SQLite
+#   sean editables desde el host.
+services:
+  freqtrade:
+    image: freqtradeorg/freqtrade:stable
+    container_name: freqtrade
+    restart: unless-stopped
+    volumes:
+      - "./user_data:/freqtrade/user_data"
+    ports:
+      - "127.0.0.1:8081:8080"
+    command: >
+      trade
+      --logfile /freqtrade/user_data/logs/freqtrade.log
+      --db-url sqlite:////freqtrade/user_data/tradesv3.sqlite
+      --config /freqtrade/user_data/config.json
+      --strategy DonchianBreakout

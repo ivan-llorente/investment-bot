@@ -1,0 +1,13 @@
+[project]
+name = "investment-bot-agent"
+version = "0.1.0"
+description = "Strands agent que supervisa el bot Freqtrade local"
+requires-python = ">=3.11"
+dependencies = [
+  "strands-agents>=1.0.0",
+  "python-dotenv>=1.0.0",
+]
+
+[tool.setuptools]
+py-modules = ["main"]
+packages = ["tools"]
