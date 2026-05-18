@@ -39,7 +39,7 @@ exitUp   = ta.highest(high, exitLen)[1]
 exitDn   = ta.lowest(low,  exitLen)[1]
 ema      = ta.ema(close, emaLen)
 atrVal   = ta.atr(atrLen)
-adxVal   = ta.adx(adxLen)
+[_diPlus, _diMinus, adxVal] = ta.dmi(adxLen, adxLen)
 emaSlope = ema - ema[emaSlopeBars]
 
 // === Filtros de régimen ===
