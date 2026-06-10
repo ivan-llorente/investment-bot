@@ -7,7 +7,9 @@
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "npm run test:integration && npm run test:bdd",
+    "test:integration": "vitest run",
+    "test:bdd": "NODE_OPTIONS=\"--import tsx\" cucumber-js",
     "test:watch": "vitest"
   },
   "dependencies": {
@@ -20,6 +22,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@cucumber/cucumber": "^13.0.0",
     "@types/better-sqlite3": "^7.6.11",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.0",
